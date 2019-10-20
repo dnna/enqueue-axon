@@ -1,11 +1,18 @@
-<?php
+<?php /** @noinspection PhpParamsInspection */
 
 declare(strict_types=1);
 
 namespace Dnna\Enqueue\Axon;
 
+use Enqueue\Client\Config;
 use Interop\Queue\Consumer;
 use Interop\Queue\SubscriptionConsumer;
+use Io\Axoniq\Axonserver\Grpc\Command\CommandProviderInbound;
+use Io\Axoniq\Axonserver\Grpc\Command\CommandProviderOutbound;
+use Io\Axoniq\Axonserver\Grpc\Command\CommandResponse;
+use Io\Axoniq\Axonserver\Grpc\Command\CommandSubscription;
+use Io\Axoniq\Axonserver\Grpc\FlowControl;
+use Io\Axoniq\Axonserver\Grpc\SerializedObject;
 
 class AxonSubscriptionConsumer implements SubscriptionConsumer
 {
@@ -63,20 +70,50 @@ class AxonSubscriptionConsumer implements SubscriptionConsumer
         $queues = [];
         /** @var Consumer $consumer */
         foreach ($this->subscribers as list($consumer)) {
-            $queues[] = $consumer->getQueue();
+            $queues[] = $consumer->getQueue()->getQueueName();
+        }
+        if (count($queues) > 1) {
+            throw new \DomainException('TODO SUPPORT MULTIPLE QUEUES');
         }
 
-        while (true) {
-            throw new \Exception('TODO');
-            if ($message = $this->receiveMessage($queues, $timeout ?: 5, $this->redeliveryDelay)) {
-                list($consumer, $callback) = $this->subscribers[$message->getKey()];
+        $stream = $this->context->openStream();
+        $flowControl = new FlowControl();
+        $flowControl->setPermits(2048);
+        $commandProviderOutbound = new CommandProviderOutbound();
+        $commandProviderOutbound->setFlowControl($flowControl);
+        $stream->write($commandProviderOutbound);
 
-                if (false === call_user_func($callback, $message, $consumer)) {
-                    return;
+        foreach ($this->context->getRouteCollection()->all() as $curRoute) {
+            $commandSubscription = new CommandSubscription();
+            $commandSubscription->setClientId($this->context->getConfig()->getApp() . '-c-' . $curRoute->getSource());
+            $commandSubscription->setComponentName($this->context->getConfig()->getApp() . '-c-' . $curRoute->getSource());
+            $commandSubscription->setCommand($curRoute->getSource());
+            $commandProviderOutbound = new CommandProviderOutbound();
+            $commandProviderOutbound->setSubscribe($commandSubscription);
+            $stream->write($commandProviderOutbound);
+        }
+        while ($inboundCommand = $stream->read()) {
+            /**
+             * @var CommandProviderInbound $inboundCommand
+             */
+            /**
+             * @var SerializedObject $payload
+             */
+            $payload = $inboundCommand->getCommand()->getPayload();
+            $message = $this->getContext()->getSerializer()->toMessage($payload->getData());
+            if ($message->getProperty(Config::COMMAND)) {
+                if (!$message->getProperty('enqueue.processor')) {
+                    /** @noinspection PhpStrictTypeCheckingInspection */
+                    $route = $this->context->getRouteCollection()->command($inboundCommand->getCommand()->getName());
+                    $message->setProperty('enqueue.processor', $route->getProcessor());
                 }
+            } else if ($message->getProperty(Config::TOPIC)) {
+                throw new \DomainException('TODO SUPPORT TOPICS (NON-COMMANDS)');
             }
 
-            if ($timeout && microtime(true) >= $endAt) {
+            //list($consumer, $callback) = $this->subscribers[$message->getKey()]; // This doesnt work because message->getKey is wrong
+            list($consumer, $callback) = $this->subscribers[$queues[0]];
+            if (false === call_user_func($callback, $message, $consumer)) {
                 return;
             }
         }

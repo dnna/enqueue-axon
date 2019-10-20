@@ -5,6 +5,10 @@ declare(strict_types=1);
 
 namespace Dnna\Enqueue\Axon;
 
+use Enqueue\Client\Config;
+use Enqueue\Client\RouteCollection;
+use Enqueue\Null\NullQueue;
+use Grpc\BidiStreamingCall;
 use Interop\Queue\Consumer;
 use Interop\Queue\Context;
 use Interop\Queue\Destination;
@@ -25,6 +29,21 @@ class AxonContext implements Context
      * @var CommandServiceClient
      */
     private $axon;
+
+    /**
+     * @var BidiStreamingCall
+     */
+    private $stream;
+
+    /**
+     * @var Config
+     */
+    private $config;
+
+    /**
+     * @var RouteCollection $routeCollection
+     */
+    private $routeCollection;
 
     /**
      * @var callable
@@ -60,6 +79,32 @@ class AxonContext implements Context
 
         $this->redeliveryDelay = $redeliveryDelay;
         $this->setSerializer(new JsonSerializer());
+    }
+
+    public function setRouteCollection(RouteCollection $routeCollection): void
+    {
+        $this->routeCollection = $routeCollection;
+    }
+
+    public function getRouteCollection(): RouteCollection
+    {
+        return $this->routeCollection;
+    }
+
+    /**
+     * @return Config
+     */
+    public function getConfig(): Config
+    {
+        return $this->config;
+    }
+
+    /**
+     * @param Config $config
+     */
+    public function setConfig(Config $config): void
+    {
+        $this->config = $config;
     }
 
     /**
@@ -115,7 +160,7 @@ class AxonContext implements Context
 
     public function createTemporaryQueue(): Queue
     {
-        throw TemporaryQueueNotSupportedException::providerDoestNotSupportIt();
+        return new AxonDestination(uniqid('axontempqueue-', true));
     }
 
     /**
@@ -184,5 +229,14 @@ class AxonContext implements Context
         }
 
         return $this->axon;
+    }
+
+    public function openStream(): BidiStreamingCall
+    {
+        if (!isset($this->stream)) {
+            $this->stream = $this->getAxon()->OpenStream();
+        }
+
+        return $this->stream;
     }
 }

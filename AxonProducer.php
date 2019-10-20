@@ -4,12 +4,16 @@ declare(strict_types=1);
 
 namespace Dnna\Enqueue\Axon;
 
+use Enqueue\Client\Config;
 use Interop\Queue\Destination;
 use Interop\Queue\Exception\InvalidDestinationException;
 use Interop\Queue\Exception\InvalidMessageException;
 use Interop\Queue\Exception\PriorityNotSupportedException;
 use Interop\Queue\Message;
 use Interop\Queue\Producer;
+use Io\Axoniq\Axonserver\Grpc\Command\Command;
+use Io\Axoniq\Axonserver\Grpc\Command\CommandResponse;
+use Io\Axoniq\Axonserver\Grpc\SerializedObject;
 use Ramsey\Uuid\Uuid;
 
 class AxonProducer implements Producer
@@ -53,6 +57,7 @@ class AxonProducer implements Producer
 
         $message->setMessageId(Uuid::uuid4()->toString());
         $message->setHeader('attempts', 0);
+        $message->setKey($destination->getName());
 
         if (null !== $this->timeToLive && null === $message->getTimeToLive()) {
             $message->setTimeToLive($this->timeToLive);
@@ -69,13 +74,45 @@ class AxonProducer implements Producer
         $payload = $this->context->getSerializer()->toString($message);
 
         if ($message->getDeliveryDelay()) {
-            $deliveryAt = time() + $message->getDeliveryDelay();
-            throw new \Exception('TODO SEND MESSAGE HERE');
-            //$this->context->getRedis()->zadd($destination->getName().':delayed', $payload, $deliveryAt);
-        } else {
-            throw new \Exception('TODO SEND MESSAGE HERE');
-            //$this->context->getRedis()->lpush($destination->getName(), $payload);
+            //$deliveryAt = time() + $message->getDeliveryDelay();
+            throw new InvalidMessageException('TODO SEND DELAYED MESSAGE');
         }
+
+        if ($message->getProperty(Config::TOPIC)) {
+            throw new InvalidMessageException('TODO HANDLE EVENTS (NON-COMMANDS)');
+        }
+
+        if (!$message->getReplyTo()) {
+            throw new InvalidMessageException('TODO HANDLE COMMANDS THAT DO NOT REQUIRE REPLY');
+        }
+
+        if ($message->getProperty(Config::COMMAND)) {
+            $command = new Command();
+            $command->setClientId($this->context->getConfig()->getApp() . '-p-' . $message->getProperty(Config::COMMAND));
+            $command->setComponentName($this->context->getConfig()->getApp() . '-p-' . $message->getProperty(Config::COMMAND));
+            //$command->setMessageIdentifier($message->getMessageId());
+            //$command->setTimestamp($message->getTimestamp());
+            $command->setName($message->getProperty(Config::COMMAND));
+            $srl = new SerializedObject();
+            $srl->setData($payload);
+            $command->setPayload($srl);
+
+            /**
+             * @var CommandResponse $reply
+             */
+            [$reply, $status] = $this->context->getAxon()->Dispatch($command)->wait();
+
+            if (!$reply) {
+                throw new InvalidDestinationException('Reply is null');
+            }
+            if ($reply->getErrorMessage() !== null) {
+                throw new InvalidDestinationException($reply->getErrorMessage()->getMessage());
+            }
+
+            return;
+        }
+
+        throw new InvalidMessageException('Message is neither event nor command');
     }
 
     /**

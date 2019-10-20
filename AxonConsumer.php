@@ -1,4 +1,4 @@
-<?php
+<?php /** @noinspection PhpParamsInspection */
 
 declare(strict_types=1);
 
@@ -8,7 +8,10 @@ use Interop\Queue\Consumer;
 use Interop\Queue\Exception\InvalidMessageException;
 use Interop\Queue\Message;
 use Interop\Queue\Queue;
+use Io\Axoniq\Axonserver\Grpc\Command\CommandProviderOutbound;
+use Io\Axoniq\Axonserver\Grpc\Command\CommandResponse;
 use Io\Axoniq\Axonserver\Grpc\Command\CommandServiceClient;
+use Io\Axoniq\Axonserver\Grpc\SerializedObject;
 
 class AxonConsumer implements Consumer
 {
@@ -62,7 +65,7 @@ class AxonConsumer implements Consumer
      */
     public function receive(int $timeout = 0): ?Message
     {
-        $timeout = (int) ceil($timeout / 1000);
+        $timeout = (int)ceil($timeout / 1000);
 
         if ($timeout <= 0) {
             while (true) {
@@ -90,8 +93,14 @@ class AxonConsumer implements Consumer
      */
     public function acknowledge(Message $message): void
     {
-        throw new \Exception('TODO');
-        //$this->getAxon()->zrem($this->queue->getName().':reserved', $message->getReservedKey());
+        $stream = $this->context->openStream();
+        $response = new CommandResponse();
+        $responseSrl = new SerializedObject();
+        $responseSrl->setData('MESSAGE RECEIVED');
+        $response->setPayload($responseSrl);
+        $commandProviderOutbound = new CommandProviderOutbound();
+        $commandProviderOutbound->setCommandResponse($response);
+        $stream->write($commandProviderOutbound);
     }
 
     /**
@@ -105,16 +114,16 @@ class AxonConsumer implements Consumer
         $this->acknowledge($message);
 
         if ($requeue) {
-            $message = $this->getContext()->getSerializer()->toMessage($message->getReservedKey());
-            $message->setHeader('attempts', 0);
+            throw new \Exception('TODO REQUEUE');
 
-            if ($message->getTimeToLive()) {
-                $message->setHeader('expires_at', time() + $message->getTimeToLive());
-            }
-
-            $payload = $this->getContext()->getSerializer()->toString($message);
-
-            throw new \Exception('TODO');
+//            $message = $this->getContext()->getSerializer()->toMessage($message->getReservedKey());
+//            $message->setHeader('attempts', 0);
+//
+//            if ($message->getTimeToLive()) {
+//                $message->setHeader('expires_at', time() + $message->getTimeToLive());
+//            }
+//
+//            $payload = $this->getContext()->getSerializer()->toString($message);
             //$this->getAxon()->lpush($this->queue->getName(), $payload);
         }
     }
